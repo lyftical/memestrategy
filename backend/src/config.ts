@@ -22,9 +22,24 @@ export interface BuyTarget {
 
 function parseTokens(raw: string | undefined): BuyTarget[] {
   if (!raw || raw.trim() === "") return [];
-  return raw.split(",").map((entry) => {
-    const [mint, weight] = entry.trim().split(":");
-    return { mint: new PublicKey(mint), weight: weight ? Number(weight) : 1 };
+  // Forgive common paste mistakes: surrounding quotes, an accidental
+  // "TOKENS=" prefix, and newlines/spaces used instead of commas.
+  const cleaned = raw
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .replace(/^TOKENS=/i, "");
+  const entries = cleaned.split(/[\s,]+/).filter(Boolean);
+  return entries.map((entry) => {
+    const [mint, weight] = entry.split(":");
+    const w = weight ? Number(weight) : 1;
+    if (Number.isNaN(w) || w <= 0) {
+      throw new Error(`Config TOKENS entry "${entry}" has an invalid weight — expected MINT:WEIGHT like abc...pump:2`);
+    }
+    try {
+      return { mint: new PublicKey(mint), weight: w };
+    } catch {
+      throw new Error(`Config TOKENS entry "${entry}" is not a valid mint address — expected MINT:WEIGHT,MINT:WEIGHT`);
+    }
   });
 }
 
