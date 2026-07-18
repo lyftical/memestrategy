@@ -3,8 +3,9 @@ import cors from "cors";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { config } from "./config.js";
 import { db } from "./db.js";
-import { treasuryKeypair, treasurySolBalance } from "./treasury.js";
-import { treasuryHoldings, runDistribution } from "./distributor.js";
+import { connection, treasuryKeypair, treasurySolBalance } from "./treasury.js";
+import { treasuryHoldings, runDistribution, computeShares } from "./distributor.js";
+import { snapshotHolders } from "./holders.js";
 import { log } from "./log.js";
 
 export function startApi(): void {
@@ -105,6 +106,58 @@ export function startApi(): void {
       .prepare("SELECT recipient, amount_raw, tx_signature, status FROM distribution_items WHERE distribution_id = ? ORDER BY CAST(amount_raw AS INTEGER) DESC LIMIT 1000")
       .all(req.params.id);
     res.json(rows);
+  });
+
+  // Dry run: compute exactly what a distribution would send, without
+  // sending anything. Read-only; everything here is public on-chain data.
+  app.get("/api/preview-distribution", async (_req, res) => {
+    try {
+      if (!config.mstrMint) {
+        res.status(400).json({ error: "mstr_mint_not_set", message: "MSTR_MINT is empty — nothing to snapshot." });
+        return;
+      }
+      const holdings = await treasuryHoldings();
+      const mintInfo = await connection().getParsedAccountInfo(config.mstrMint);
+      const mstrDecimals =
+        (mintInfo.value?.data as { parsed?: { info?: { decimals?: number } } })?.parsed?.info?.decimals ?? 6;
+      const holders = await snapshotHolders(config.mstrMint, mstrDecimals);
+      const supply = holders.reduce((s, h) => s + h.amountRaw, 0n);
+
+      const plan = holdings.map((h) => {
+        const shares = computeShares(h.amountRaw, holders);
+        return {
+          mint: h.mint.toBase58(),
+          totalToDistribute: Number(h.amountRaw) / 10 ** h.decimals,
+          recipientCount: shares.size,
+          payouts: [...shares.entries()].slice(0, 50).map(([recipient, amt]) => ({
+            recipient,
+            amount: Number(amt) / 10 ** h.decimals,
+          })),
+        };
+      });
+
+      const totalRecipientSlots = plan.reduce((s, p) => s + p.recipientCount, 0);
+      res.json({
+        dryRun: true,
+        mstrMint: config.mstrMint.toBase58(),
+        minHolderBalance: config.minHolderUiBalance,
+        eligibleHolders: holders.length,
+        holders: holders.slice(0, 50).map((h) => ({
+          owner: h.owner,
+          balance: Number(h.amountRaw) / 10 ** mstrDecimals,
+          sharePct: supply > 0n ? Number((h.amountRaw * 10000n) / supply) / 100 : 0,
+        })),
+        plan,
+        costEstimate: {
+          treasurySolBalance: await treasurySolBalance(),
+          worstCaseAtaRentSol: +(totalRecipientSlots * 0.00203928).toFixed(6),
+          note: "Rent applies only to recipients without an existing token account for that mint; fees extra (~0.0002/batch).",
+        },
+      });
+    } catch (err) {
+      log.error("/api/preview-distribution", err);
+      res.status(500).json({ error: "preview_failed", message: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // ── Admin (ADMIN_KEY header) ─────────────────────────────────────

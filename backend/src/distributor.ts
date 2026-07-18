@@ -40,7 +40,7 @@ export async function treasuryHoldings(): Promise<TreasuryHolding[]> {
   return holdings;
 }
 
-function computeShares(total: bigint, holders: Holder[]): Map<string, bigint> {
+export function computeShares(total: bigint, holders: Holder[]): Map<string, bigint> {
   const supply = holders.reduce((s, h) => s + h.amountRaw, 0n);
   const shares = new Map<string, bigint>();
   if (supply === 0n) return shares;
