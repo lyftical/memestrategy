@@ -60,6 +60,7 @@ export const config = {
   mstrMint: process.env.MSTR_MINT ? new PublicKey(process.env.MSTR_MINT) : null,
 
   autoBuy: bool("AUTO_BUY", true),
+  backfillOnBoot: bool("BACKFILL_ON_BOOT", false),
   minDepositSol: num("MIN_DEPOSIT_SOL", 0.01),
   reserveSol: num("RESERVE_SOL", 0.05),
   slippageBps: num("SLIPPAGE_BPS", 300),

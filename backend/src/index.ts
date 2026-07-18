@@ -1,7 +1,7 @@
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assertRunnable, config } from "./config.js";
 import { connection, treasuryKeypair } from "./treasury.js";
-import { pollDeposits } from "./watcher.js";
+import { pollDeposits, backfillDeposits } from "./watcher.js";
 import { processPendingDeposits } from "./buyer.js";
 import { runDistribution } from "./distributor.js";
 import { startApi } from "./api.js";
@@ -19,6 +19,15 @@ async function main(): Promise<void> {
   log.info(`Auto-buy: ${config.autoBuy} | Auto-distribute: ${config.autoDistribute}`);
 
   startApi();
+
+  if (config.backfillOnBoot) {
+    try {
+      const n = await backfillDeposits(100);
+      if (n > 0) log.info(`Backfill recovered ${n} missed deposit(s); the buy loop will process them.`);
+    } catch (err) {
+      log.error("backfill", err);
+    }
+  }
 
   // Watch + buy loop
   let ticking = false;

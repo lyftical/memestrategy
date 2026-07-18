@@ -89,6 +89,49 @@ export async function pollDeposits(): Promise<Deposit[]> {
   return found.filter((d) => d.lamports / LAMPORTS_PER_SOL >= config.minDepositSol);
 }
 
+/**
+ * One-shot recovery scan: walk the most recent `limit` transactions and
+ * record any deposits not already in the table (e.g. sent while the
+ * service was down or before the watermark was set). Idempotent — known
+ * signatures are ignored. Does not move the forward watermark.
+ */
+export async function backfillDeposits(limit = 100): Promise<number> {
+  const conn = connection();
+  const treasury = treasuryKeypair().publicKey;
+  const sigInfos = await conn.getSignaturesForAddress(treasury, { limit }, "confirmed");
+  let recovered = 0;
+
+  for (const info of [...sigInfos].reverse()) {
+    if (info.err) continue;
+    const exists = db.prepare("SELECT 1 FROM deposits WHERE signature = ?").get(info.signature);
+    if (exists) continue;
+    const tx = await conn.getTransaction(info.signature, {
+      maxSupportedTransactionVersion: 0,
+      commitment: "confirmed",
+    });
+    if (!tx || !tx.meta) continue;
+
+    const keys = tx.transaction.message.getAccountKeys({
+      accountKeysFromLookups: tx.meta.loadedAddresses ?? undefined,
+    });
+    const idx = keys.staticAccountKeys
+      .concat(keys.accountKeysFromLookups?.writable ?? [], keys.accountKeysFromLookups?.readonly ?? [])
+      .findIndex((k: PublicKey) => k.equals(treasury));
+    if (idx === -1) continue;
+
+    const delta = (tx.meta.postBalances[idx] ?? 0) - (tx.meta.preBalances[idx] ?? 0);
+    const feePayer = keys.staticAccountKeys[0];
+    if (delta <= 0 || feePayer.equals(treasury)) continue;
+
+    insertDeposit.run(info.signature, feePayer.toBase58(), delta, info.slot, info.blockTime ?? null, now());
+    recovered++;
+    log.info(`Backfilled deposit ${delta / LAMPORTS_PER_SOL} SOL from ${feePayer.toBase58().slice(0, 8)}… (${info.signature.slice(0, 12)}…)`);
+  }
+
+  if (recovered === 0) log.info("Backfill scan complete — no missed deposits found.");
+  return recovered;
+}
+
 /** Deposits recorded but not yet converted into buys. */
 export function pendingDeposits(): { signature: string; lamports: number }[] {
   return db
