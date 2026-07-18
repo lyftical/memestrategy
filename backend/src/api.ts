@@ -120,7 +120,7 @@ export function startApi(): void {
       const mintInfo = await connection().getParsedAccountInfo(config.mstrMint);
       const mstrDecimals =
         (mintInfo.value?.data as { parsed?: { info?: { decimals?: number } } })?.parsed?.info?.decimals ?? 6;
-      const holders = await snapshotHolders(config.mstrMint, mstrDecimals);
+      const { holders, autoExcluded } = await snapshotHolders(config.mstrMint, mstrDecimals);
       const supply = holders.reduce((s, h) => s + h.amountRaw, 0n);
 
       const plan = holdings.map((h) => {
@@ -146,6 +146,11 @@ export function startApi(): void {
           owner: h.owner,
           balance: Number(h.amountRaw) / 10 ** mstrDecimals,
           sharePct: supply > 0n ? Number((h.amountRaw * 10000n) / supply) / 100 : 0,
+        })),
+        autoExcluded: autoExcluded.slice(0, 20).map((e) => ({
+          owner: e.owner,
+          balance: Number(e.amountRaw) / 10 ** mstrDecimals,
+          reason: e.reason,
         })),
         plan,
         costEstimate: {

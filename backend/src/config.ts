@@ -72,6 +72,7 @@ export const config = {
   distributionIntervalHours: num("DISTRIBUTION_INTERVAL_HOURS", 24),
   minHolderUiBalance: num("MIN_HOLDER_UI_BALANCE", 1),
   excludedAddresses: parseExcluded(process.env.EXCLUDED_ADDRESSES),
+  autoExcludePools: bool("AUTO_EXCLUDE_POOLS", true),
 
   port: num("PORT", 8787),
   adminKey: process.env.ADMIN_KEY ?? "",

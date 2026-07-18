@@ -79,11 +79,11 @@ export async function runDistribution(): Promise<{ ok: boolean; message: string 
   const mstrDecimals =
     (mintInfo.value?.data as { parsed?: { info?: { decimals?: number } } })?.parsed?.info?.decimals ?? 6;
 
-  const holders = await snapshotHolders(config.mstrMint, mstrDecimals);
+  const { holders, autoExcluded } = await snapshotHolders(config.mstrMint, mstrDecimals);
   if (holders.length === 0) {
     return { ok: false, message: "No eligible MSTR holders found." };
   }
-  log.info(`Snapshot: ${holders.length} eligible MSTR holders.`);
+  log.info(`Snapshot: ${holders.length} eligible MSTR holders (${autoExcluded.length} pool/program addresses auto-excluded).`);
 
   const kp = treasuryKeypair();
 

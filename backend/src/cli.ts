@@ -34,7 +34,13 @@ async function main(): Promise<void> {
       const info = await connection().getParsedAccountInfo(config.mstrMint);
       const decimals =
         (info.value?.data as { parsed?: { info?: { decimals?: number } } })?.parsed?.info?.decimals ?? 6;
-      const holders = await snapshotHolders(config.mstrMint, decimals);
+      const { holders, autoExcluded } = await snapshotHolders(config.mstrMint, decimals);
+      if (autoExcluded.length > 0) {
+        console.log(`${autoExcluded.length} pool/program address(es) auto-excluded:`);
+        for (const e of autoExcluded.slice(0, 10)) {
+          console.log(`  ${e.owner}  ${Number(e.amountRaw) / 10 ** decimals}  (${e.reason})`);
+        }
+      }
       console.log(`${holders.length} eligible holders`);
       for (const h of holders.slice(0, 25)) {
         console.log(`${h.owner}  ${Number(h.amountRaw) / 10 ** decimals}`);
