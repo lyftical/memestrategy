@@ -5,9 +5,10 @@ import {
 } from "@solana/web3.js";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
-  createTransferInstruction,
+  createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 import { config } from "./config.js";
 import { connection, treasuryKeypair } from "./treasury.js";
@@ -21,21 +22,24 @@ interface TreasuryHolding {
   mint: PublicKey;
   amountRaw: bigint;
   decimals: number;
+  programId: PublicKey;
 }
 
-/** Everything the treasury currently holds from buys (excluding MSTR itself). */
+/** Everything the treasury currently holds from buys (excluding MSTR itself), across both token programs. */
 export async function treasuryHoldings(): Promise<TreasuryHolding[]> {
   const conn = connection();
   const owner = treasuryKeypair().publicKey;
-  const resp = await conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, "confirmed");
   const holdings: TreasuryHolding[] = [];
-  for (const { account } of resp.value) {
-    const info = account.data.parsed.info;
-    const amountRaw = BigInt(info.tokenAmount.amount);
-    if (amountRaw === 0n) continue;
-    const mint = new PublicKey(info.mint);
-    if (config.mstrMint && mint.equals(config.mstrMint)) continue;
-    holdings.push({ mint, amountRaw, decimals: info.tokenAmount.decimals });
+  for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+    const resp = await conn.getParsedTokenAccountsByOwner(owner, { programId }, "confirmed");
+    for (const { account } of resp.value) {
+      const info = account.data.parsed.info;
+      const amountRaw = BigInt(info.tokenAmount.amount);
+      if (amountRaw === 0n) continue;
+      const mint = new PublicKey(info.mint);
+      if (config.mstrMint && mint.equals(config.mstrMint)) continue;
+      holdings.push({ mint, amountRaw, decimals: info.tokenAmount.decimals, programId });
+    }
   }
   return holdings;
 }
@@ -100,7 +104,7 @@ export async function runDistribution(): Promise<{ ok: boolean; message: string 
        VALUES (?, ?, ?, ?, ?, ?)`
     );
 
-    const sourceAta = getAssociatedTokenAddressSync(holding.mint, kp.publicKey);
+    const sourceAta = getAssociatedTokenAddressSync(holding.mint, kp.publicKey, false, holding.programId);
     const entries = [...shares.entries()];
     let sent = 0;
     let failed = 0;
@@ -114,10 +118,19 @@ export async function runDistribution(): Promise<{ ok: boolean; message: string 
 
       for (const [recipient, amount] of batch) {
         const owner = new PublicKey(recipient);
-        const destAta = getAssociatedTokenAddressSync(holding.mint, owner);
+        const destAta = getAssociatedTokenAddressSync(holding.mint, owner, false, holding.programId);
         tx.add(
-          createAssociatedTokenAccountIdempotentInstruction(kp.publicKey, destAta, owner, holding.mint),
-          createTransferInstruction(sourceAta, destAta, kp.publicKey, amount)
+          createAssociatedTokenAccountIdempotentInstruction(kp.publicKey, destAta, owner, holding.mint, holding.programId),
+          createTransferCheckedInstruction(
+            sourceAta,
+            holding.mint,
+            destAta,
+            kp.publicKey,
+            amount,
+            holding.decimals,
+            [],
+            holding.programId
+          )
         );
       }
 
