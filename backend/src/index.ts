@@ -44,16 +44,19 @@ async function main(): Promise<void> {
     }
   }, config.watchIntervalSec * 1000);
 
-  // Optional scheduled distribution
+  // Optional scheduled distribution: one run shortly after boot (so the
+  // behavior is immediately observable), then on the configured interval.
   if (config.autoDistribute) {
-    setInterval(async () => {
+    const run = async (label: string): Promise<void> => {
       try {
         const result = await runDistribution();
-        log.info(`Scheduled distribution: ${result.message}`);
+        log.info(`${label} distribution: ${result.message}`);
       } catch (err) {
-        log.error("scheduled distribution", err);
+        log.error(`${label} distribution`, err);
       }
-    }, config.distributionIntervalHours * 3600 * 1000);
+    };
+    setTimeout(() => void run("Initial"), 90_000);
+    setInterval(() => void run("Scheduled"), config.distributionIntervalHours * 3600 * 1000);
   }
 
   log.info("Running. Send SOL to the treasury address to trigger buys.");
