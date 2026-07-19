@@ -29,14 +29,20 @@ async function main(): Promise<void> {
     }
   }
 
-  // Watch + buy loop
+  // Watch + buy loop. When buys land and auto-distribute is on, the
+  // payout follows immediately instead of waiting for the interval.
   let ticking = false;
   setInterval(async () => {
     if (ticking) return; // prevent overlap if a tick runs long
     ticking = true;
     try {
       await pollDeposits();
-      await processPendingDeposits();
+      const bought = await processPendingDeposits();
+      if (bought > 0 && config.autoDistribute) {
+        log.info(`${bought} buy leg(s) landed — distributing to holders now.`);
+        const result = await runDistribution();
+        log.info(`Post-buy distribution: ${result.message}`);
+      }
     } catch (err) {
       log.error("watch/buy tick", err);
     } finally {

@@ -66,18 +66,21 @@ async function mintDecimals(mint: string): Promise<number> {
 /**
  * Convert pending deposits into token buys, split by configured weights.
  * Each deposit is spent independently so the buy feed maps 1:1 to deposits.
+ * Returns the number of successful buy legs, so callers can react
+ * (e.g. trigger a distribution) when new tokens actually arrived.
  */
-export async function processPendingDeposits(): Promise<void> {
-  if (!config.autoBuy) return;
+export async function processPendingDeposits(): Promise<number> {
+  if (!config.autoBuy) return 0;
   if (config.tokens.length === 0) {
     log.warn("Deposits pending but TOKENS is empty — nothing to buy.");
-    return;
+    return 0;
   }
 
   const pending = pendingDeposits();
-  if (pending.length === 0) return;
+  if (pending.length === 0) return 0;
 
   const totalWeight = config.tokens.reduce((s, t) => s + t.weight, 0);
+  let successfulLegs = 0;
 
   for (const dep of pending) {
     // Cap by what's actually spendable (reserve protected).
@@ -101,6 +104,7 @@ export async function processPendingDeposits(): Promise<void> {
         const decimals = await mintDecimals(mint);
         insertBuy.run(dep.signature, mint, share, quote.outAmount, decimals, sig, "success", null, now());
         anySuccess = true;
+        successfulLegs++;
         log.info(`Bought ${mint.slice(0, 8)}… with ${share / LAMPORTS_PER_SOL} SOL → tx ${sig.slice(0, 12)}…`);
       } catch (err) {
         insertBuy.run(dep.signature, mint, share, "0", 0, null, "failed", err instanceof Error ? err.message : String(err), now());
@@ -112,4 +116,6 @@ export async function processPendingDeposits(): Promise<void> {
     // and their SOL stays in the treasury for the next deposit cycle.
     markDeposit(dep.signature, anySuccess ? 1 : 2);
   }
+
+  return successfulLegs;
 }
