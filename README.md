@@ -1,18 +1,15 @@
 # MSTR Treasury
 
-A Solana treasury machine with a public dashboard.
+A Solana airdrop engine.
 
-**Flow:** you send SOL to the treasury wallet → the backend detects the deposit → it swaps the SOL into your configured pump tokens (via Jupiter) → on each distribution run, everything the treasury holds is sent to $MSTR holders, proportional to their share of supply.
+**Flow:** anyone sends SOL to the treasury wallet → the backend detects the deposit → swaps the SOL into the configured pump tokens (via Jupiter) → immediately distributes everything the treasury holds to eligible $MSTR holders, proportional to their share of supply. A daily interval run and a boot-time run sweep anything the instant path missed.
 
 ```
 mstr-treasury/
-├── backend/     Node + TypeScript service (watcher, buyer, distributor, API)
-└── dashboard/   Vite + React public dashboard
+└── backend/     Node + TypeScript service (watcher, buyer, distributor, API)
 ```
 
 ## Quick start
-
-### 1. Backend
 
 ```bash
 cd backend
@@ -29,7 +26,7 @@ npm run wallet -- new
 Put the printed base58 secret into `.env` as `TREASURY_SECRET_KEY`, set `RPC_URL` (Helius or QuickNode — you need one that allows `getProgramAccounts`), and set `TOKENS` with your pump token mints:
 
 ```
-TOKENS=MintAddressOne...pump:2,MintAddressTwo...pump:1
+TOKENS=MintAddressOne...pump:1,MintAddressTwo...pump:1
 ```
 
 Weights are relative — `2` gets twice the SOL of `1`. Leave `MSTR_MINT` empty until launch; buys work without it, distributions stay off.
@@ -42,47 +39,33 @@ npm run dev        # development
 npm run build && npm start
 ```
 
-Send SOL to the printed treasury address. Within ~20 seconds the watcher records the deposit and the buyer swaps it into your token list.
+Send SOL to the printed treasury address. Within ~20 seconds the watcher records the deposit, the buyer swaps it into your token list, and (with `AUTO_DISTRIBUTE=true` and `MSTR_MINT` set) the payout to holders follows immediately.
 
-### 2. Dashboard
+**Railway:** create a service from this repo, set **Root Directory** to `backend` (the included `backend/railway.json` handles build and start commands), paste your `.env` values into the Variables tab, and attach a **volume mounted at `/app/data`** so the SQLite history survives redeploys.
 
-```bash
-cd dashboard
-npm install
-npm run dev                     # local, points at http://localhost:8787
-```
+The backend needs a persistent process (the watcher loop), so serverless hosts won't work — use Railway/Render/Fly/VPS.
 
-For production, build with the deployed API URL:
+## Distribution safety rails
 
-```bash
-VITE_API_URL=https://your-backend-host npm run build
-```
+- **Fresh snapshot every run** — holders are queried live (classic SPL and Token-2022) seconds before each payout.
+- **Pools excluded automatically** (`AUTO_EXCLUDE_POOLS=true`): liquidity pools, bonding curves, and other program-owned addresses never receive airdrops. Add team wallets to `EXCLUDED_ADDRESSES` manually.
+- **USD eligibility floor** (`MIN_HOLDER_USD`): holders must hold at least this many dollars' worth of $MSTR (priced via Jupiter at snapshot time). Falls back to `MIN_HOLDER_UI_BALANCE` tokens when the mint has no price yet.
+- **Dry run first:** `GET /api/preview-distribution` shows the exact holder list, shares, auto-exclusions, applied floor, and rent cost of the next payout without sending anything.
 
-**Vercel (dashboard only):** a `vercel.json` at the repo root is included — import the repo as-is and Vercel will build the dashboard automatically, no settings changes needed. Just add the `VITE_API_URL` environment variable (your backend URL) in the Vercel project and redeploy after the backend is up.
+## Changing the $MSTR mint (launch day)
 
-**Railway (backend):** create a service from the same repo, set **Root Directory** to `backend` (the included `backend/railway.json` handles build and start commands), paste your `.env` values into the Variables tab, and attach a **volume mounted at `/app/data`** so the SQLite history survives redeploys. Railway's generated public URL is what goes into Vercel's `VITE_API_URL`.
-
-The backend **will not work on Vercel serverless** — the watcher loop needs a persistent process, which is why it lives on Railway/Render/Fly/VPS.
-
-Until the backend is reachable, the dashboard shows clearly-labeled sample data so you can see the design.
-
-### 3. When $MSTR launches
-
-1. Put the mint in `.env` as `MSTR_MINT=...`
-2. Add addresses that should NOT receive distributions to `EXCLUDED_ADDRESSES` — at minimum the pump.fun bonding curve / Raydium LP address, plus any team wallets. The treasury excludes itself automatically.
-3. Restart the backend.
-4. Test with a dry look first: `npm run snapshot` prints the eligible holder list.
-5. Run your first payout manually: `npm run distribute` (or `POST /api/admin/distribute` with the `x-admin-key` header). Flip `AUTO_DISTRIBUTE=true` once you trust it.
+1. Set `AUTO_DISTRIBUTE=false` (auto-distribute fires ~90s after boot and right after buys — pause it first).
+2. Change `MSTR_MINT` to the new mint.
+3. Check `/api/preview-distribution`: holders look right, the pool shows up under `autoExcluded`.
+4. Set `AUTO_DISTRIBUTE=true`.
 
 ## Operational notes — read before real money
 
-- **This is a hot wallet.** The secret key sits in `.env` on your server. If the server is compromised, the treasury is gone. Keep balances working-capital sized: send what you intend to deploy, not a war chest. Never commit `.env` (add it to `.gitignore` — already done).
-- **ATA rent:** sending a token to a wallet that's never held it costs ~0.002 SOL to create their token account, paid by the treasury. 1,000 fresh holders ≈ 2+ SOL in rent per token distributed. `MIN_HOLDER_UI_BALANCE` and rounding (dust floors to zero) keep this sane — tune the minimum before your first big run.
-- **Slippage:** pump tokens are thin. `SLIPPAGE_BPS=300` (3%) is the default; big deposits into small tokens will move the price. Consider splitting large sends into several smaller ones.
-- **Failed legs are safe:** if a buy fails, that SOL simply stays in the vault for the next cycle. If a distribution batch fails, the tokens stay in the vault and go out in the next run. Nothing is retried blindly.
-- **First run behavior:** the watcher starts from "now" — SOL already sitting in the wallet before first boot isn't treated as a deposit. Send a fresh (small!) test amount after starting.
-- **Test sequence:** 0.05 SOL deposit → confirm buys on Solscan → set MSTR_MINT on a test token you hold → `npm run snapshot` → `npm run distribute` → check a recipient wallet. Only then scale up.
-- One more thing worth a real look before launch: a token whose pitch is "hold it and receive automated payouts" can be treated as a security in a lot of jurisdictions. Worth 30 minutes with someone who knows the rules where you live.
+- **This is a hot wallet.** The secret key sits in env on your server. If the server is compromised, the treasury is gone. Keep balances working-capital sized. Never commit `.env`.
+- **ATA rent:** sending a token to a wallet that's never held it costs ~0.002 SOL, paid by the treasury — per token, so 5 buy targets ≈ 0.01 SOL per fresh holder per cycle. The USD floor keeps this sane.
+- **Slippage:** pump tokens are thin. `SLIPPAGE_BPS=300` (3%) is the default; big deposits into small tokens will move the price.
+- **Failed legs are safe:** a failed buy leaves the SOL in the vault; a failed distribution batch leaves the tokens in the vault. The next cycle (or the daily sweep) picks them up. `BACKFILL_ON_BOOT=true` also recovers deposits sent while the service was down.
+- A token whose pitch is "hold it and receive automated payouts" can be treated as a security in a lot of jurisdictions. Worth 30 minutes with someone who knows the rules where you live.
 
 ## API
 
@@ -94,6 +77,7 @@ Until the backend is reachable, the dashboard shows clearly-labeled sample data 
 | `GET /api/buys` | Buy feed |
 | `GET /api/distributions` | Distribution runs |
 | `GET /api/distributions/:id/items` | Per-wallet payout detail |
+| `GET /api/preview-distribution` | Dry run: who would get what, and at what cost |
 | `POST /api/admin/distribute` | Trigger a payout (`x-admin-key` header) |
 
 ## Config reference
