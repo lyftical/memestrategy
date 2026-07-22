@@ -18,6 +18,23 @@ export interface AutoExcluded {
 export interface HolderSnapshot {
   holders: Holder[];
   autoExcluded: AutoExcluded[];
+  /** USD price used for the MIN_HOLDER_USD floor, null if unavailable. */
+  priceUsd: number | null;
+  /** The effective minimum token balance applied to this snapshot. */
+  minTokensRequired: number;
+}
+
+/** Jupiter price lookup; returns null when the token has no quoted price. */
+async function fetchPriceUsd(mint: PublicKey): Promise<number | null> {
+  try {
+    const res = await fetch(`${config.priceApiBase}?ids=${mint.toBase58()}`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { data?: Record<string, { price?: string | number } | null> };
+    const p = Number(body.data?.[mint.toBase58()]?.price);
+    return Number.isFinite(p) && p > 0 ? p : null;
+  } catch {
+    return null;
+  }
 }
 
 // Program IDs we can name in reports. Anything else program-owned still
@@ -61,7 +78,27 @@ export async function snapshotHolders(mint: PublicKey, decimals: number): Promis
   ]);
 
   const treasury = treasuryKeypair().publicKey.toBase58();
-  const minRaw = BigInt(Math.floor(config.minHolderUiBalance * 10 ** decimals));
+
+  // Eligibility floor: MIN_HOLDER_UI_BALANCE tokens, raised to whatever
+  // token amount is worth MIN_HOLDER_USD when a USD floor is configured
+  // and the token has a live price. Without a price (e.g. pre-launch),
+  // the token floor applies alone — logged so it's never silent.
+  let minRaw = BigInt(Math.floor(config.minHolderUiBalance * 10 ** decimals));
+  let priceUsd: number | null = null;
+  if (config.minHolderUsd > 0) {
+    priceUsd = await fetchPriceUsd(mint);
+    if (priceUsd) {
+      const usdFloorRaw = BigInt(Math.ceil((config.minHolderUsd / priceUsd) * 10 ** decimals));
+      if (usdFloorRaw > minRaw) minRaw = usdFloorRaw;
+      log.info(
+        `Eligibility floor: $${config.minHolderUsd} at $${priceUsd}/token = ${Number(minRaw) / 10 ** decimals} tokens minimum.`
+      );
+    } else {
+      log.warn(
+        `MIN_HOLDER_USD=${config.minHolderUsd} set but no price available for ${mint.toBase58().slice(0, 8)}… — falling back to MIN_HOLDER_UI_BALANCE=${config.minHolderUiBalance}.`
+      );
+    }
+  }
 
   const byOwner = new Map<string, bigint>();
   for (const { account } of [...classic, ...t22]) {
@@ -112,5 +149,5 @@ export async function snapshotHolders(mint: PublicKey, decimals: number): Promis
   // Largest first — purely cosmetic, but makes logs/DB easy to read.
   holders.sort((a, b) => (b.amountRaw > a.amountRaw ? 1 : b.amountRaw < a.amountRaw ? -1 : 0));
   autoExcluded.sort((a, b) => (b.amountRaw > a.amountRaw ? 1 : b.amountRaw < a.amountRaw ? -1 : 0));
-  return { holders, autoExcluded };
+  return { holders, autoExcluded, priceUsd, minTokensRequired: Number(minRaw) / 10 ** decimals };
 }

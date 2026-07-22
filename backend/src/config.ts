@@ -71,6 +71,8 @@ export const config = {
   autoDistribute: bool("AUTO_DISTRIBUTE", false),
   distributionIntervalHours: num("DISTRIBUTION_INTERVAL_HOURS", 24),
   minHolderUiBalance: num("MIN_HOLDER_UI_BALANCE", 1),
+  minHolderUsd: num("MIN_HOLDER_USD", 0),
+  priceApiBase: process.env.PRICE_API_BASE ?? "https://lite-api.jup.ag/price/v2",
   excludedAddresses: parseExcluded(process.env.EXCLUDED_ADDRESSES),
   autoExcludePools: bool("AUTO_EXCLUDE_POOLS", true),
 

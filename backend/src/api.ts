@@ -120,7 +120,7 @@ export function startApi(): void {
       const mintInfo = await connection().getParsedAccountInfo(config.mstrMint);
       const mstrDecimals =
         (mintInfo.value?.data as { parsed?: { info?: { decimals?: number } } })?.parsed?.info?.decimals ?? 6;
-      const { holders, autoExcluded } = await snapshotHolders(config.mstrMint, mstrDecimals);
+      const { holders, autoExcluded, priceUsd, minTokensRequired } = await snapshotHolders(config.mstrMint, mstrDecimals);
       const supply = holders.reduce((s, h) => s + h.amountRaw, 0n);
 
       const plan = holdings.map((h) => {
@@ -141,6 +141,9 @@ export function startApi(): void {
         dryRun: true,
         mstrMint: config.mstrMint.toBase58(),
         minHolderBalance: config.minHolderUiBalance,
+        minHolderUsd: config.minHolderUsd || null,
+        mstrPriceUsd: priceUsd,
+        effectiveMinTokens: minTokensRequired,
         eligibleHolders: holders.length,
         holders: holders.slice(0, 50).map((h) => ({
           owner: h.owner,
