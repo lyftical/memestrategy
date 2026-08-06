@@ -108,9 +108,26 @@ export async function runDistribution(): Promise<{ ok: boolean; message: string 
     const entries = [...shares.entries()];
     let sent = 0;
     let failed = 0;
+    let skipped = 0;
+
+    // Worst case per batch: 5 fresh ATAs (~0.0102 SOL rent) + fees.
+    const MIN_BATCH_LAMPORTS = 12_000_000;
 
     for (let i = 0; i < entries.length; i += RECIPIENTS_PER_TX) {
       const batch = entries.slice(i, i + RECIPIENTS_PER_TX);
+
+      const balance = await conn.getBalance(kp.publicKey, "confirmed");
+      if (balance < MIN_BATCH_LAMPORTS) {
+        log.warn(
+          `SOL float exhausted (${balance / 1e9} SOL) — pausing distribution ${distId}; ` +
+            `${entries.length - i} recipients roll over to the next run. Top up the treasury to resume.`
+        );
+        for (const [recipient, amount] of entries.slice(i)) {
+          insertItem.run(distId, recipient, amount.toString(), null, "skipped", "insufficient SOL float — retries next run");
+          skipped++;
+        }
+        break;
+      }
       const tx = new Transaction();
       tx.add(
         ComputeBudgetProgram.setComputeUnitPrice({ microLamports: config.priorityFeeMicroLamports })
@@ -157,9 +174,11 @@ export async function runDistribution(): Promise<{ ok: boolean; message: string 
       }
     }
 
-    const status = failed === 0 ? "complete" : sent === 0 ? "failed" : "partial";
+    const status = failed === 0 && skipped === 0 ? "complete" : sent === 0 ? "failed" : "partial";
     db.prepare("UPDATE distributions SET status = ?, finished_at = ? WHERE id = ?").run(status, now(), distId);
-    log.info(`Distribution ${distId} for ${holding.mint.toBase58().slice(0, 8)}…: ${status} (${sent} sent, ${failed} failed)`);
+    log.info(
+      `Distribution ${distId} for ${holding.mint.toBase58().slice(0, 8)}…: ${status} (${sent} sent, ${failed} failed, ${skipped} skipped)`
+    );
   }
 
   return { ok: true, message: "Distribution run finished. See /api/distributions for detail." };
