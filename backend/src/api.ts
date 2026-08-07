@@ -137,6 +137,24 @@ export function startApi(): void {
       });
 
       const totalRecipientSlots = plan.reduce((s, p) => s + p.recipientCount, 0);
+
+      // Exact rent: count destination ATAs that don't exist yet, per mint.
+      const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+      const { PublicKey } = await import("@solana/web3.js");
+      const conn = connection();
+      let missingAtas = 0;
+      for (const h of holdings) {
+        const shares = computeShares(h.amountRaw, holders);
+        const atas = [...shares.keys()].map((owner) =>
+          getAssociatedTokenAddressSync(h.mint, new PublicKey(owner), false, h.programId)
+        );
+        for (let i = 0; i < atas.length; i += 100) {
+          const infos = await conn.getMultipleAccountsInfo(atas.slice(i, i + 100), "confirmed");
+          missingAtas += infos.filter((x) => x === null).length;
+        }
+      }
+      const exactRentSol = +(missingAtas * 0.00203928).toFixed(6);
+      const feeEstSol = +(plan.reduce((s, p) => s + Math.ceil(p.recipientCount / 5), 0) * 0.00016).toFixed(6);
       res.json({
         dryRun: true,
         mstrMint: config.mstrMint.toBase58(),
@@ -158,8 +176,12 @@ export function startApi(): void {
         plan,
         costEstimate: {
           treasurySolBalance: await treasurySolBalance(),
+          newAccountsToCreate: missingAtas,
+          exactRentSol,
+          feeEstSol,
+          totalCostSol: +(exactRentSol + feeEstSol).toFixed(6),
           worstCaseAtaRentSol: +(totalRecipientSlots * 0.00203928).toFixed(6),
-          note: "Rent applies only to recipients without an existing token account for that mint; fees extra (~0.0002/batch).",
+          note: "exactRentSol counts destination token accounts that don't exist yet; rent lands in recipients' accounts, not burned.",
         },
       });
     } catch (err) {
