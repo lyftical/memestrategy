@@ -116,7 +116,14 @@ export async function runDistribution(): Promise<{ ok: boolean; message: string 
     for (let i = 0; i < entries.length; i += RECIPIENTS_PER_TX) {
       const batch = entries.slice(i, i + RECIPIENTS_PER_TX);
 
-      const balance = await conn.getBalance(kp.publicKey, "confirmed");
+      // Guarded: an RPC hiccup here must not abort the whole run — the
+      // batch itself fails loudly if SOL is truly short.
+      let balance = Number.MAX_SAFE_INTEGER;
+      try {
+        balance = await conn.getBalance(kp.publicKey, "confirmed");
+      } catch {
+        /* proceed with last-known-good assumption */
+      }
       if (balance < MIN_BATCH_LAMPORTS) {
         log.warn(
           `SOL float exhausted (${balance / 1e9} SOL) — pausing distribution ${distId}; ` +

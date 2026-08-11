@@ -32,8 +32,10 @@ async function main(): Promise<void> {
   // Watch + buy loop. When buys land and auto-distribute is on, the
   // payout follows immediately instead of waiting for the interval.
   let ticking = false;
+  let rpcCooldownUntil = 0;
   setInterval(async () => {
     if (ticking) return; // prevent overlap if a tick runs long
+    if (Date.now() < rpcCooldownUntil) return; // back off while rate-limited
     ticking = true;
     try {
       await pollDeposits();
@@ -45,6 +47,10 @@ async function main(): Promise<void> {
       }
     } catch (err) {
       log.error("watch/buy tick", err);
+      if (String(err).includes("429")) {
+        rpcCooldownUntil = Date.now() + 5 * 60_000;
+        log.warn("RPC rate-limited — pausing deposit polling for 5 minutes instead of hammering the endpoint.");
+      }
     } finally {
       ticking = false;
     }

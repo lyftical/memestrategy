@@ -8,16 +8,39 @@ import { treasuryHoldings, runDistribution, computeShares } from "./distributor.
 import { snapshotHolders } from "./holders.js";
 import { log } from "./log.js";
 
+/**
+ * Memoize an async producer for ttlMs. Public endpoints are hit by
+ * community members and bots — without this every page view costs live
+ * RPC calls, which is what exhausts free-tier RPC quotas.
+ */
+function cached<T>(ttlMs: number, fn: () => Promise<T>): () => Promise<T> {
+  let at = 0;
+  let val: Promise<T> | null = null;
+  return () => {
+    if (!val || Date.now() - at > ttlMs) {
+      at = Date.now();
+      val = fn().catch((err) => {
+        val = null; // don't cache failures
+        throw err;
+      });
+    }
+    return val;
+  };
+}
+
 export function startApi(): void {
   const app = express();
   app.use(cors());
   app.use(express.json());
 
+  const cachedSolBalance = cached(15_000, () => treasurySolBalance());
+  const cachedHoldings = cached(15_000, () => treasuryHoldings());
+
   // ── Public, read-only ────────────────────────────────────────────
 
   app.get("/api/stats", async (_req, res) => {
     try {
-      const sol = await treasurySolBalance();
+      const sol = await cachedSolBalance();
       const totals = db
         .prepare(
           `SELECT
@@ -50,7 +73,7 @@ export function startApi(): void {
 
   app.get("/api/holdings", async (_req, res) => {
     try {
-      const holdings = await treasuryHoldings();
+      const holdings = await cachedHoldings();
       res.json(
         holdings.map((h) => ({
           mint: h.mint.toBase58(),
@@ -110,13 +133,9 @@ export function startApi(): void {
 
   // Dry run: compute exactly what a distribution would send, without
   // sending anything. Read-only; everything here is public on-chain data.
-  app.get("/api/preview-distribution", async (_req, res) => {
-    try {
-      if (!config.mstrMint) {
-        res.status(400).json({ error: "mstr_mint_not_set", message: "MSTR_MINT is empty — nothing to snapshot." });
-        return;
-      }
-      const holdings = await treasuryHoldings();
+  const buildPreview = async () => {
+      if (!config.mstrMint) return null;
+      const holdings = await cachedHoldings();
       const mintInfo = await connection().getParsedAccountInfo(config.mstrMint);
       const mstrDecimals =
         (mintInfo.value?.data as { parsed?: { info?: { decimals?: number } } })?.parsed?.info?.decimals ?? 6;
@@ -155,7 +174,7 @@ export function startApi(): void {
       }
       const exactRentSol = +(missingAtas * 0.00203928).toFixed(6);
       const feeEstSol = +(plan.reduce((s, p) => s + Math.ceil(p.recipientCount / 5), 0) * 0.00016).toFixed(6);
-      res.json({
+      return {
         dryRun: true,
         mstrMint: config.mstrMint.toBase58(),
         minHolderBalance: config.minHolderUiBalance,
@@ -175,7 +194,7 @@ export function startApi(): void {
         })),
         plan,
         costEstimate: {
-          treasurySolBalance: await treasurySolBalance(),
+          treasurySolBalance: await cachedSolBalance(),
           newAccountsToCreate: missingAtas,
           exactRentSol,
           feeEstSol,
@@ -183,7 +202,20 @@ export function startApi(): void {
           worstCaseAtaRentSol: +(totalRecipientSlots * 0.00203928).toFixed(6),
           note: "exactRentSol counts destination token accounts that don't exist yet; rent lands in recipients' accounts, not burned.",
         },
-      });
+      };
+  };
+  // The preview walks every holder and checks hundreds of accounts — by
+  // far the most RPC-expensive endpoint, and it's public. Cache hard.
+  const cachedPreview = cached(60_000, buildPreview);
+
+  app.get("/api/preview-distribution", async (_req, res) => {
+    try {
+      const payload = await cachedPreview();
+      if (!payload) {
+        res.status(400).json({ error: "mstr_mint_not_set", message: "MSTR_MINT is empty — nothing to snapshot." });
+        return;
+      }
+      res.json(payload);
     } catch (err) {
       log.error("/api/preview-distribution", err);
       res.status(500).json({ error: "preview_failed", message: err instanceof Error ? err.message : String(err) });
