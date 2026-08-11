@@ -40,7 +40,8 @@ export function startApi(): void {
 
   app.get("/api/stats", async (_req, res) => {
     try {
-      const sol = await cachedSolBalance();
+      // Serve DB-backed stats even when the RPC is down; balance goes null.
+      const sol = await cachedSolBalance().catch(() => null);
       const totals = db
         .prepare(
           `SELECT
