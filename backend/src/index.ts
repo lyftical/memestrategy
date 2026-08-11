@@ -11,14 +11,21 @@ async function main(): Promise<void> {
   assertRunnable();
 
   const treasury = treasuryKeypair().publicKey.toBase58();
-  const balance = await connection().getBalance(treasuryKeypair().publicKey);
   log.info(`Treasury: ${treasury}`);
-  log.info(`Balance:  ${balance / LAMPORTS_PER_SOL} SOL`);
   log.info(`Buy targets: ${config.tokens.length ? config.tokens.map((t) => `${t.mint.toBase58().slice(0, 8)}…×${t.weight}`).join(", ") : "(none set)"}`);
   log.info(`MSTR mint: ${config.mstrMint?.toBase58() ?? "(not launched yet — distributions off)"}`);
   log.info(`Auto-buy: ${config.autoBuy} | Auto-distribute: ${config.autoDistribute}`);
 
+  // API first: the service must be reachable even when the RPC is down
+  // or rate-limited — boot never depends on a live RPC call.
   startApi();
+
+  try {
+    const balance = await connection().getBalance(treasuryKeypair().publicKey);
+    log.info(`Balance:  ${balance / LAMPORTS_PER_SOL} SOL`);
+  } catch (err) {
+    log.warn(`Balance check failed at boot (RPC unavailable?) — continuing; loops will retry. ${err instanceof Error ? err.message.slice(0, 80) : err}`);
+  }
 
   if (config.backfillOnBoot) {
     try {
