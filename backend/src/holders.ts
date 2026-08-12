@@ -2,6 +2,7 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { AccountLayout, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { config } from "./config.js";
 import { connection, treasuryKeypair } from "./treasury.js";
+import { setMeta } from "./db.js";
 import { log } from "./log.js";
 
 export interface Holder {
@@ -149,5 +150,7 @@ export async function snapshotHolders(mint: PublicKey, decimals: number): Promis
   // Largest first — purely cosmetic, but makes logs/DB easy to read.
   holders.sort((a, b) => (b.amountRaw > a.amountRaw ? 1 : b.amountRaw < a.amountRaw ? -1 : 0));
   autoExcluded.sort((a, b) => (b.amountRaw > a.amountRaw ? 1 : b.amountRaw < a.amountRaw ? -1 : 0));
+  // Feed the dynamic fee/rent reserve (treasury.reserveLamports).
+  setMeta("last_holder_count", String(holders.length));
   return { holders, autoExcluded, priceUsd, minTokensRequired: Number(minRaw) / 10 ** decimals };
 }
