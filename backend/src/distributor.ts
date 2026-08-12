@@ -25,10 +25,24 @@ interface TreasuryHolding {
   programId: PublicKey;
 }
 
-/** Everything the treasury currently holds from buys (excluding MSTR itself), across both token programs. */
+/**
+ * Everything the treasury currently holds from buys (excluding MSTR
+ * itself), across both token programs.
+ *
+ * Only mints the engine actually bought (current TOKENS list or any past
+ * successful buy) are distributable. Strangers spam-airdrop junk tokens
+ * to active wallets, and without this filter the engine would pay real
+ * ATA rent to airdrop garbage — or dust like the 0.0011 USDC someone
+ * once sent us — to every holder.
+ */
 export async function treasuryHoldings(): Promise<TreasuryHolding[]> {
   const conn = connection();
   const owner = treasuryKeypair().publicKey;
+
+  const allowed = new Set<string>(config.tokens.map((t) => t.mint.toBase58()));
+  const bought = db.prepare("SELECT DISTINCT mint FROM buys WHERE status = 'success'").all() as { mint: string }[];
+  for (const b of bought) allowed.add(b.mint);
+
   const holdings: TreasuryHolding[] = [];
   for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
     const resp = await conn.getParsedTokenAccountsByOwner(owner, { programId }, "confirmed");
@@ -38,6 +52,10 @@ export async function treasuryHoldings(): Promise<TreasuryHolding[]> {
       if (amountRaw === 0n) continue;
       const mint = new PublicKey(info.mint);
       if (config.mstrMint && mint.equals(config.mstrMint)) continue;
+      if (!allowed.has(mint.toBase58())) {
+        log.info(`Ignoring unbought token ${mint.toBase58().slice(0, 8)}… in vault (spam-airdrop guard).`);
+        continue;
+      }
       holdings.push({ mint, amountRaw, decimals: info.tokenAmount.decimals, programId });
     }
   }
